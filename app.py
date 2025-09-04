@@ -16,29 +16,31 @@ symbol = st.selectbox("ارز دیجیتال:", ["BTC-USD", "ETH-USD", "BNB-USD"
 interval = st.selectbox("بازه زمانی:", ["1d", "1h", "30m"])
 lookback_days = st.slider("تعداد روزهای گذشته برای آموزش:", min_value=60, max_value=365, value=180)
 
-# دریافت قیمت زنده از Binance
-st.sidebar.title("💰 قیمت زنده")
-def fetch_binance_price(symbol="BTCUSDT"):
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+# دریافت قیمت زنده از CoinGecko
+st.sidebar.title("💰 قیمت زنده (CoinGecko)")
+
+def fetch_coingecko_price(symbol="bitcoin", vs="usd"):
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies={vs}"
     try:
-        response = requests.get(url)
-        data = response.json()
-        return float(data['price'])
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        return data[symbol][vs]
     except:
         return None
 
 symbol_map = {
-    "BTC-USD": "BTCUSDT",
-    "ETH-USD": "ETHUSDT",
-    "BNB-USD": "BNBUSDT",
-    "SOL-USD": "SOLUSDT"
+    "BTC-USD": "bitcoin",
+    "ETH-USD": "ethereum",
+    "BNB-USD": "binancecoin",
+    "SOL-USD": "solana"
 }
 
-live_price = fetch_binance_price(symbol_map[symbol])
+live_price = fetch_coingecko_price(symbol_map[symbol], "usd")
 if live_price:
-    st.sidebar.metric(label=f"💲 قیمت لحظه‌ای {symbol}", value=f"{live_price:,.2f} USDT")
+    st.sidebar.metric(label=f"💲 قیمت لحظه‌ای {symbol}", value=f"{live_price:,.2f} USD")
 else:
     st.sidebar.warning("❌ دریافت قیمت زنده ممکن نیست.")
+
 
 # دریافت داده تاریخی
 end_date = datetime.today()
