@@ -1,22 +1,79 @@
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import pandas as pd
-from keras.models import load_model
-from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+import numpy as np
+from datetime import timedelta
 import requests
+import plotly.graph_objects as go
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 
-st.set_page_config(layout="wide")
-st.title("📈 داشبورد پیش‌بینی قیمت ارز دیجیتال با LSTM")
+st.set_page_config(page_title="Crypto Prediction Dashboard", layout="wide")
 
-# انتخاب ارز دیجیتال و بازه زمانی
-symbol = st.selectbox("ارز دیجیتال:", ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD"])
-interval = st.selectbox("بازه زمانی:", ["1d", "1h", "30m"])
-lookback_days = st.slider("تعداد روزهای گذشته برای آموزش:", min_value=60, max_value=365, value=180)
+st.title("📈 داشبورد پیش‌بینی قیمت ارزهای دیجیتال")
 
+# ===============================
+# تنظیمات سایدبار
+# ===============================
+st.sidebar.header("⚙️ تنظیمات")
+
+symbol = st.sidebar.selectbox("انتخاب ارز", ["BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD"])
+interval = st.sidebar.selectbox("بازه زمانی", ["1d", "1h", "30m"])
+period = st.sidebar.selectbox("طول داده تاریخی", ["6mo", "1y", "2y"], index=0)
+
+# ===============================
+# دریافت داده تاریخی از Yahoo Finance
+# ===============================
+@st.cache_data
+def load_data(symbol, period, interval):
+    data = yf.download(symbol, period=period, interval=interval)
+    return data
+
+data = load_data(symbol, period, interval)
+
+# ===============================
+# مدل LSTM برای پیش‌بینی
+# ===============================
+def train_and_predict(data, days=7):
+    df = data[["Close"]].copy()
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(df)
+
+    # آماده‌سازی داده
+    X, y = [], []
+    for i in range(60, len(scaled_data)):
+        X.append(scaled_data[i-60:i, 0])
+        y.append(scaled_data[i, 0])
+    X, y = np.array(X), np.array(y)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+
+    # مدل LSTM
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
+    model.add(LSTM(units=50))
+    model.add(Dense(1))
+    model.compile(optimizer="adam", loss="mean_squared_error")
+    model.fit(X, y, epochs=3, batch_size=32, verbose=0)
+
+    # پیش‌بینی روزهای آینده
+    last_60 = scaled_data[-60:]
+    input_data = last_60.reshape(1, 60, 1)
+
+    predictions = []
+    for _ in range(days):
+        pred = model.predict(input_data, verbose=0)
+        predictions.append(pred[0, 0])
+        input_data = np.append(input_data[:, 1:, :], [[pred]], axis=1)
+
+    predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+    return predictions
+
+predicted = train_and_predict(data, days=7)
+
+# ===============================
 # دریافت قیمت زنده از CoinGecko
+# ===============================
 st.sidebar.title("💰 قیمت زنده (CoinGecko)")
 
 def fetch_coingecko_price(symbol="bitcoin", vs="usd"):
@@ -41,64 +98,36 @@ if live_price:
 else:
     st.sidebar.warning("❌ دریافت قیمت زنده ممکن نیست.")
 
+# ===============================
+# نمودار کندلی + پیش‌بینی
+# ===============================
+st.subheader("📊 نمودار کندلی + پیش‌بینی ۷ روز آینده")
 
-# دریافت داده تاریخی
-end_date = datetime.today()
-start_date = end_date - timedelta(days=lookback_days)
-data = yf.download(symbol, start=start_date, end=end_date, interval=interval)
-if data.empty:
-    st.warning("❌ داده‌ای برای این تنظیمات پیدا نشد.")
-    st.stop()
+fig = go.Figure(data=[go.Candlestick(
+    x=data.index,
+    open=data["Open"],
+    high=data["High"],
+    low=data["Low"],
+    close=data["Close"],
+    name="قیمت واقعی"
+)])
 
-# آماده‌سازی داده‌ها
-data = data[["Close"]]
-scaler = MinMaxScaler(feature_range=(0, 1))
-scaled = scaler.fit_transform(data)
-
-def create_dataset(dataset, time_step=60):
-    X, y = [], []
-    for i in range(len(dataset) - time_step - 1):
-        X.append(dataset[i:(i + time_step), 0])
-        y.append(dataset[i + time_step, 0])
-    return np.array(X), np.array(y)
-
-time_step = 60
-X, y = create_dataset(scaled, time_step)
-X = X.reshape(X.shape[0], X.shape[1], 1)
-
-# آموزش سریع مدل (یا بارگذاری)
-@st.cache_resource
-def load_or_train_model():
-    from keras.models import Sequential
-    from keras.layers import LSTM, Dense
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-    model.add(LSTM(50))
-    model.add(Dense(1))
-    model.compile(loss="mean_squared_error", optimizer="adam")
-    model.fit(X, y, epochs=5, batch_size=32, verbose=0)
-    return model
-
-model = load_or_train_model()
-
-# پیش‌بینی ۷ روز آینده
-last_60 = scaled[-60:].reshape(1, 60, 1)
-future_predictions = []
-input_seq = last_60.copy()
-
-for _ in range(7):
-    next_pred = model.predict(input_seq)[0][0]
-    future_predictions.append(next_pred)
-    input_seq = np.append(input_seq[:, 1:, :], [[[next_pred]]], axis=1)
-
-predicted = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-
-# نمایش نمودار
-st.subheader("📊 نمودار پیش‌بینی ۷ روز آینده")
-fig, ax = plt.subplots()
-ax.plot(data.index[-100:], data["Close"].values[-100:], label="قیمت واقعی")
+# اضافه کردن پیش‌بینی
 future_dates = [data.index[-1] + timedelta(days=i+1) for i in range(7)]
-ax.plot(future_dates, predicted, label="پیش‌بینی", color="red")
-ax.legend()
-st.pyplot(fig)
+fig.add_trace(go.Scatter(
+    x=future_dates,
+    y=predicted.flatten(),
+    mode="lines+markers",
+    name="پیش‌بینی",
+    line=dict(color="red", width=2)
+))
 
+fig.update_layout(
+    xaxis_title="تاریخ",
+    yaxis_title="قیمت (USD)",
+    xaxis_rangeslider_visible=False,
+    template="plotly_dark",
+    height=600
+)
+
+st.plotly_chart(fig, use_container_width=True)

@@ -6,4 +6,4 @@ scikit-learn
 keras
 matplotlib
 requests
-
+plotly
